@@ -48,4 +48,3 @@ MonoBehaviour:
   randomness: 0
   floorPrefab: {fileID: 3105298067696572809, guid: 7b69978cb19c45441bfc6b38b7058473, type: 3}
   wallPrefab: {fileID: 1570068411773067638, guid: a5bd429da0fdc154898ebea5fcda4e83, type: 3}
-  straightPathAvoidanceChance: 0.8

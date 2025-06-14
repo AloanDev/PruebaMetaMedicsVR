@@ -1,13 +1,14 @@
 ﻿using UnityEngine;
 using System.Collections.Generic;
-using System.Linq; // Necesario para .Any() y .Last()
+using System.Linq;
 
 /// <summary>
 /// Gestiona la generación de contenido (suelos y paredes, y caminos) dentro de un chunk individual.
 /// </summary>
 public class OrganicChunkGenerator : MonoBehaviour
 {
-    [Header("Chunk Settings")] [Tooltip("Dimensiones del chunk (ej. 13x13 unidades).")]
+    [Header("Chunk Settings")]
+    [Tooltip("Dimensiones del chunk (ej. 13x13 unidades).")]
     public int chunkSize = 13;
 
     private int m_Seed; // Semilla de generación para este chunk específico
@@ -18,7 +19,8 @@ public class OrganicChunkGenerator : MonoBehaviour
 
     private const int MMaxAttempts = 2000; // Máximo de intentos para generar segmentos de camino
 
-    [Header("Prefabs")] public GameObject floorPrefab; // Prefab para los bloques de suelo
+    [Header("Prefabs")]
+    public GameObject floorPrefab; // Prefab para los bloques de suelo
     public GameObject wallPrefab; // Prefab para los bloques de pared (asegúrate de que tenga el tag "Wall")
 
     /// <summary>
@@ -44,12 +46,16 @@ public class OrganicChunkGenerator : MonoBehaviour
         new List<ConnectionDirection>(); // Direcciones de salida
 
     /// <summary>
-    /// Genera el contenido del chunk basándose en una semilla, dirección de entrada y salidas deseadas.
+    /// Genera el contenido del chunk basándose en una semilla, dirección de entrada y salidas deseadas,
+    /// y los datos de altura del terreno.
     /// </summary>
     /// <param name="seed">La semilla para la generación de este chunk.</param>
     /// <param name="entryDir">La dirección por la que el jugador entró o se conectará a este chunk.</param>
     /// <param name="desiredExits">Una lista de direcciones por las que se desea que el chunk tenga salidas.</param>
-    public void GenerateChunk(int seed, ConnectionDirection entryDir, List<ConnectionDirection> desiredExits)
+    /// <param name="terrainHeightsData">Los datos de altura [x,z] para cada columna de terreno en este chunk.</param>
+    /// <param name="dirtDepth">La profundidad de la capa de tierra debajo del césped.</param>
+    public void GenerateChunk(int seed, ConnectionDirection entryDir, List<ConnectionDirection> desiredExits,
+                              int[,] terrainHeightsData, int dirtDepth)
     {
         m_Seed = seed;
         Random.InitState(m_Seed);
@@ -57,7 +63,7 @@ public class OrganicChunkGenerator : MonoBehaviour
         Debug.Log(
             $"Generando chunk en {transform.position} con semilla: {m_Seed}, Entrada: {entryDir}, Salidas deseadas: {string.Join(", ", desiredExits)}");
 
-        GenerateBase(); // Crea el suelo y las paredes básicas
+        GenerateBase(terrainHeightsData, dirtDepth);
 
         EntryDirection = entryDir;
         EntryPoint = GetEdgePoint(entryDir); // Obtiene el punto de borde para la entrada
@@ -65,9 +71,7 @@ public class OrganicChunkGenerator : MonoBehaviour
         ActiveExitPoints.Clear(); // Limpia las salidas anteriores
         ActiveExitDirections.Clear();
 
-        Vector2Int
-            internalPathStart =
-                GetPathInternalPoint(EntryPoint, EntryDirection); // Punto de inicio del camino dentro del chunk
+        Vector2Int internalPathStart = GetPathInternalPoint(EntryPoint, EntryDirection); // Punto de inicio del camino dentro del chunk
 
         // Si no se especifican salidas deseadas, generar una aleatoria (comportamiento de fallback)
         if (desiredExits == null || desiredExits.Count == 0)
@@ -87,23 +91,18 @@ public class OrganicChunkGenerator : MonoBehaviour
             }
 
             Vector2Int currentExitPoint = GetEdgePoint(exitDir); // Punto de borde para esta salida
-            Vector2Int currentInternalExit =
-                GetPathInternalPoint(currentExitPoint, exitDir); // Punto de salida del camino dentro del chunk
+            Vector2Int currentInternalExit = GetPathInternalPoint(currentExitPoint, exitDir); // Punto de salida del camino dentro del chunk
 
             List<Vector2Int> pathSegment = new List<Vector2Int>(); // Lista para almacenar los puntos del camino
-            Vector2Int
-                midPoint = GetMidPointForForcedTurn(internalPathStart,
-                    currentInternalExit); // Intenta encontrar un punto intermedio para forzar un giro en L
+            Vector2Int midPoint = GetMidPointForForcedTurn(internalPathStart, currentInternalExit); // Intenta encontrar un punto intermedio para forzar un giro en L
 
             if (midPoint.x != -1) // Si se encontró un midPoint válido
             {
-                TraversePathSegment(internalPathStart, midPoint,
-                    pathSegment); // Primero segmento: inicio a punto intermedio
+                TraversePathSegment(internalPathStart, midPoint, pathSegment); // Primero segmento: inicio a punto intermedio
                 Vector2Int current = pathSegment.Any() ? pathSegment.Last() : internalPathStart;
                 if (current != currentInternalExit)
                 {
-                    TraversePathSegment(current, currentInternalExit,
-                        pathSegment); // Segundo segmento: punto intermedio a salida
+                    TraversePathSegment(current, currentInternalExit, pathSegment); // Segundo segmento: punto intermedio a salida
                 }
             }
             else // Si no hay midPoint, intenta un camino directo
@@ -134,10 +133,13 @@ public class OrganicChunkGenerator : MonoBehaviour
     }
 
     /// <summary>
-    /// Genera la base del chunk (suelo y paredes sólidas en todas las posiciones).
+    /// Genera la base del chunk (suelo, paredes perimetrales y terreno 3D de montañas)
+    /// basado en los datos de altura de Perlin noise.
     /// Destruye cualquier objeto hijo existente primero.
     /// </summary>
-    private void GenerateBase()
+    /// <param name="terrainHeightsData">El array 2D de alturas para este chunk (altura sobre baseTerrainHeight).</param>
+    /// <param name="dirtDepth">La profundidad de la capa de tierra debajo del césped.</param>
+    private void GenerateBase(int[,] terrainHeightsData, int dirtDepth)
     {
         // Limpiar objetos hijos existentes (útil para la reutilización del pool)
         foreach (Transform child in transform)
@@ -145,13 +147,26 @@ public class OrganicChunkGenerator : MonoBehaviour
             Destroy(child.gameObject);
         }
 
-        // Instanciar el suelo y las paredes en cada posición del chunk
+        // Instanciar el suelo (siempre en Y=0)
         for (int x = 0; x < chunkSize; x++)
         {
             for (int z = 0; z < chunkSize; z++)
             {
                 Instantiate(floorPrefab, new Vector3(x, 0, z) + transform.position, Quaternion.identity, transform);
+
+                // Instanciar la primera capa de "pared" (Y=1)
                 Instantiate(wallPrefab, new Vector3(x, 1, z) + transform.position, Quaternion.identity, transform);
+
+                int heightFromPerlin = terrainHeightsData[x, z];
+
+                // Generación de montañas/terreno 3D (a partir de Y=2)
+                if (heightFromPerlin > 1 && x > 0 && x < chunkSize - 1 && z > 0 && z < chunkSize - 1)
+                {
+                    for (int y = 2; y <= heightFromPerlin; y++)
+                    {
+                        Instantiate(wallPrefab, new Vector3(x, y, z) + transform.position, Quaternion.identity, transform);
+                    }
+                }
             }
         }
     }
@@ -167,7 +182,6 @@ public class OrganicChunkGenerator : MonoBehaviour
         Vector2Int currentSegmentPoint = segmentStart;
         int attempts = 0;
 
-        // Asegúrate de que el punto de inicio del segmento esté en el camino y su pared destruida
         if (!path.Contains(segmentStart))
         {
             path.Add(segmentStart);
@@ -175,29 +189,27 @@ public class OrganicChunkGenerator : MonoBehaviour
         }
         else
         {
-            DestroyWallAt(segmentStart); // Si ya está, solo asegura que la pared esté destruida
+            DestroyWallAt(segmentStart);
         }
 
-        // Recorrer el camino hasta llegar al final o agotar intentos
         while (currentSegmentPoint != segmentEnd && attempts < MMaxAttempts)
         {
             Vector2Int next = GetNextStep(currentSegmentPoint, segmentEnd, path);
 
-            if (next == currentSegmentPoint) // Si no se pudo mover, el camino está atascado
+            if (next == currentSegmentPoint)
             {
                 Debug.LogWarning($"Segmento atascado de {currentSegmentPoint} a {segmentEnd}. Forzando camino.");
-                ForceCompletePath(currentSegmentPoint, segmentEnd, path); // Forzar la finalización
-                currentSegmentPoint = segmentEnd; // Forzar que el camino se complete para salir del bucle
+                ForceCompletePath(currentSegmentPoint, segmentEnd, path);
+                currentSegmentPoint = segmentEnd;
                 break;
             }
 
             path.Add(next);
             currentSegmentPoint = next;
-            DestroyWallAt(currentSegmentPoint); // Destruir la pared en el nuevo punto del camino
+            DestroyWallAt(currentSegmentPoint);
             attempts++;
         }
 
-        // Si por alguna razón el camino no llegó al final, forzar la finalización
         if (currentSegmentPoint != segmentEnd)
         {
             ForceCompletePath(currentSegmentPoint, segmentEnd, path);
@@ -226,7 +238,6 @@ public class OrganicChunkGenerator : MonoBehaviour
 
         Vector2Int primaryDirection = Vector2Int.zero;
 
-        // Intentar moverse hacia el objetivo con una preferencia (X o Y)
         if (canMoveX && canMoveY)
         {
             if (Random.value < 0.5f)
@@ -250,17 +261,15 @@ public class OrganicChunkGenerator : MonoBehaviour
         if (primaryDirection != Vector2Int.zero)
         {
             Vector2Int potentialStep = current + primaryDirection;
-            // Solo toma el paso primario si está en límites, no está ya en el camino y la aleatoriedad lo permite
             if (IsPathPointInBounds(potentialStep) && !path.Contains(potentialStep))
             {
-                if (Random.value > randomness) // Si randomness es 0, siempre lo toma
+                if (Random.value > randomness)
                 {
                     return potentialStep;
                 }
             }
         }
 
-        // Si el paso primario no es válido o la aleatoriedad lo impide, busca pasos ortogonales aleatorios
         foreach (var dir in orthogonalDirections)
         {
             Vector2Int step = current + dir;
@@ -275,7 +284,7 @@ public class OrganicChunkGenerator : MonoBehaviour
             return validSteps[Random.Range(0, validSteps.Count)];
         }
 
-        return current; // Atascado, no puede moverse
+        return current;
     }
 
     /// <summary>
@@ -293,7 +302,6 @@ public class OrganicChunkGenerator : MonoBehaviour
         {
             Vector2Int next = current;
 
-            // Mover en X primero, luego en Y si no se ha alcanzado la X deseada
             if (current.x != to.x)
             {
                 next.x += (to.x > current.x) ? 1 : -1;
@@ -303,35 +311,31 @@ public class OrganicChunkGenerator : MonoBehaviour
                 next.y += (to.y > current.y) ? 1 : -1;
             }
 
-            if (next == current) break; // Evitar bucle infinito si no hay movimiento
+            if (next == current) break;
 
-            // Asegurar que el punto sea válido antes de añadirlo
             if (IsPathPointInBounds(next) && !path.Contains(next))
             {
                 path.Add(next);
                 DestroyWallAt(next);
             }
-            else if
-                (next == to) // Caso especial si el destino ya está en el camino, pero queremos asegurarnos de procesarlo
+            else if (next == to)
             {
                 if (!path.Contains(next))
                 {
                     path.Add(next);
                     DestroyWallAt(next);
                 }
-
-                current = to; // Ya hemos llegado al destino, salir
+                current = to;
                 break;
             }
             else
             {
-                // Si el punto no es válido (fuera de límites o ya en el camino de FORMA INESPERADA), salir
                 Debug.LogWarning(
                     $"ForceCompletePath: No se pudo añadir el punto {next} (fuera de límites o ya en el camino).");
                 break;
             }
 
-            current = next; // Avanzar al siguiente punto
+            current = next;
         }
     }
 
@@ -344,15 +348,14 @@ public class OrganicChunkGenerator : MonoBehaviour
     /// <returns>Un punto intermedio local, o Vector2Int(-1, -1) si no se encontró uno adecuado.</returns>
     private Vector2Int GetMidPointForForcedTurn(Vector2Int start, Vector2Int end)
     {
-        int minInnerBound = 1; // Borde interior del chunk (para que el camino no esté en el borde exacto)
+        int minInnerBound = 1;
         int maxInnerBound = chunkSize - 2;
 
         List<Vector2Int> potentialMidPoints = new List<Vector2Int>();
 
-        Vector2Int candidate1 = new Vector2Int(start.x, end.y); // Punto de giro en L (X de inicio, Y de fin)
-        Vector2Int candidate2 = new Vector2Int(end.x, start.y); // Punto de giro en L (X de fin, Y de inicio)
+        Vector2Int candidate1 = new Vector2Int(start.x, end.y);
+        Vector2Int candidate2 = new Vector2Int(end.x, start.y);
 
-        // Si los puntos de inicio y fin no están alineados (se requiere un giro natural en L)
         if (start.x != end.x && start.y != end.y)
         {
             if (IsPathPointInBounds(candidate1) && candidate1 != start && candidate1 != end)
@@ -360,9 +363,8 @@ public class OrganicChunkGenerator : MonoBehaviour
             if (IsPathPointInBounds(candidate2) && candidate2 != start && candidate2 != end)
                 potentialMidPoints.Add(candidate2);
         }
-        else // Si están alineados (se requiere un "desvío" para un giro forzado)
+        else
         {
-            // Solo añadir si no son colineales con el segmento original
             if (IsPathPointInBounds(candidate1) && candidate1 != start && candidate1 != end)
             {
                 if (!IsCollinear(start, end, candidate1))
@@ -380,21 +382,17 @@ public class OrganicChunkGenerator : MonoBehaviour
             }
         }
 
-        if (potentialMidPoints.Any()) // Si encontramos candidatos de giro "naturales"
+        if (potentialMidPoints.Any())
         {
             return potentialMidPoints[Random.Range(0, potentialMidPoints.Count)];
         }
 
-        // Si no se encontraron puntos de giro naturales, intentar encontrar un punto de giro aleatorio
-        // dentro del chunk que fuerce un giro.
         for (int i = 0; i < 100; i++)
         {
             int randX = Random.Range(minInnerBound, maxInnerBound + 1);
             int randY = Random.Range(minInnerBound, maxInnerBound + 1);
             Vector2Int randomMid = new Vector2Int(randX, randY);
 
-            // El punto aleatorio debe estar dentro de los límites internos, no ser el inicio/fin,
-            // y no ser colineal con el segmento inicio-fin para forzar un giro.
             if (randomMid != start && randomMid != end &&
                 !IsCollinear(start, end, randomMid))
             {
@@ -404,7 +402,7 @@ public class OrganicChunkGenerator : MonoBehaviour
 
         Debug.LogWarning(
             $"No se pudo encontrar un midPoint de giro válido para start:{start} y end:{end} en chunk {transform.position}. Generando camino recto como fallback.");
-        return new Vector2Int(-1, -1); // Indicar que no se encontró un midPoint de giro
+        return new Vector2Int(-1, -1);
     }
 
     /// <summary>
@@ -412,7 +410,6 @@ public class OrganicChunkGenerator : MonoBehaviour
     /// </summary>
     private bool IsCollinear(Vector2Int p1, Vector2Int p2, Vector2Int p3)
     {
-        // Verdadero si los tres puntos están en la misma línea horizontal o vertical
         return (p1.x == p2.x && p3.x == p1.x) || (p1.y == p2.y && p3.y == p1.y);
     }
 
@@ -421,8 +418,8 @@ public class OrganicChunkGenerator : MonoBehaviour
     /// </summary>
     private bool IsPathPointInBounds(Vector2Int point)
     {
-        int minBound = 1; // Dejar un borde de paredes
-        int maxBound = chunkSize - 2; // El borde opuesto
+        int minBound = 1;
+        int maxBound = chunkSize - 2;
 
         return point.x >= minBound && point.x <= maxBound &&
                point.y >= minBound && point.y <= maxBound;
@@ -441,7 +438,7 @@ public class OrganicChunkGenerator : MonoBehaviour
             case ConnectionDirection.East: return new Vector2Int(chunkSize - 1, center);
             case ConnectionDirection.West: return new Vector2Int(0, center);
             case ConnectionDirection.Center: return new Vector2Int(center, center);
-            case ConnectionDirection.None: return new Vector2Int(-1, -1); // Valor de error/nulo
+            case ConnectionDirection.None: return new Vector2Int(-1, -1);
             default: return Vector2Int.zero;
         }
     }
@@ -455,14 +452,13 @@ public class OrganicChunkGenerator : MonoBehaviour
     /// <returns>Un punto local un paso dentro del chunk desde el borde.</returns>
     public Vector2Int GetPathInternalPoint(Vector2Int edgePoint, ConnectionDirection edgeDirection)
     {
-        int innerOffset = 1; // Un paso hacia adentro desde el borde
+        int innerOffset = 1;
 
         if (edgeDirection == ConnectionDirection.Center || edgePoint.x == -1)
         {
-            return edgePoint; // Si es el centro o un punto no válido, no hay offset
+            return edgePoint;
         }
 
-        // Mover el punto un paso hacia adentro del chunk
         if (edgeDirection == ConnectionDirection.North)
         {
             return new Vector2Int(edgePoint.x, edgePoint.y - innerOffset);
@@ -480,33 +476,33 @@ public class OrganicChunkGenerator : MonoBehaviour
             return new Vector2Int(edgePoint.x + innerOffset, edgePoint.y);
         }
 
-        return edgePoint; // Fallback
+        return edgePoint;
     }
 
     /// <summary>
-    /// Destruye la pared (GameObject con tag "Wall") en una posición local específica del chunk.
+    /// Destruye la "pared" o "bloque de montaña" (GameObject con tag "Wall") en una posición local específica del chunk,
+    /// abarcando todas las alturas posibles para el terreno que no sean el suelo base.
     /// </summary>
-    /// <param name="point">La posición local (X,Z) dentro del chunk donde destruir la pared.</param>
+    /// <param name="point">La posición local (X,Z) dentro del chunk donde destruir los bloques.</param>
     private void DestroyWallAt(Vector2Int point)
     {
-        if (point.x == -1 || point.y == -1) return; // No destruir si el punto no es válido
+        if (point.x == -1 || point.y == -1) return;
 
-        // Calcular la posición global del punto de la pared (asumiendo altura 1 para las paredes)
-        Vector3 globalPoint = new Vector3(point.x, 1, point.y) + transform.position;
-
-        // Usar OverlapBox para encontrar colliders en esa posición
-        // El 0.4f es para que sea un poco más pequeño que el cubo y no solape con paredes adyacentes
-        Collider[] walls = Physics.OverlapBox(
-            globalPoint,
-            Vector3.one * 0.4f
-        );
-
-        foreach (Collider wall in walls)
+        for (int y = 1; y <= (chunkSize / 2) + 2; y++)
         {
-            // Asegúrate de que tus prefabs de pared tengan el tag "Wall"
-            if (wall.CompareTag("Wall"))
+            Vector3 globalPoint = new Vector3(point.x, y, point.y) + transform.position;
+
+            Collider[] colliders = Physics.OverlapBox(
+                globalPoint,
+                Vector3.one * 0.4f
+            );
+
+            foreach (Collider col in colliders)
             {
-                Destroy(wall.gameObject); // Eliminar el objeto de la pared
+                if (col.CompareTag("Wall"))
+                {
+                    Destroy(col.gameObject);
+                }
             }
         }
     }
@@ -526,7 +522,6 @@ public class OrganicChunkGenerator : MonoBehaviour
             ConnectionDirection.West
         };
 
-        // No podemos salir por donde entramos
         possibleExits.Remove(entryDir);
 
         if (possibleExits.Count == 0) return ConnectionDirection.None;

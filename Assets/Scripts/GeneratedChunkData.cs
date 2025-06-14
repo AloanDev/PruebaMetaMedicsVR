@@ -9,8 +9,9 @@ public class GeneratedChunkData
     public List<OrganicChunkGenerator.ConnectionDirection> activeExitDirections = new List<OrganicChunkGenerator.ConnectionDirection>();
     public int levelChunkIndex; // Índice único del chunk en el nivel
 
-    // Puedes añadir más datos aquí si el chunk guarda estado de interactuables, enemigos, etc.
-    // Por ahora, solo necesitamos lo esencial para regenerar su forma.
+    // --- NUEVO: Datos de altura del terreno generados por Perlin noise ---
+    public int[,] terrainHeights; // Almacenará la altura (Y) de cada bloque (X, Z)
+    // -------------------------------------------------------------------
 
     public GeneratedChunkData(Vector3 pos, int seed, OrganicChunkGenerator.ConnectionDirection entryDir, int index)
     {

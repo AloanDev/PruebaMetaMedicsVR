@@ -1,8 +1,7 @@
 ﻿using UnityEngine;
 using System.Collections.Generic;
-using System.Linq; // Necesario para .Any() y .FirstOrDefault()
+using System.Linq;
 
-// Necesario para Gizmos en el editor (si usas Handles.Label)
 #if UNITY_EDITOR
 using UnityEditor;
 #endif
@@ -13,7 +12,8 @@ using UnityEditor;
 /// </summary>
 public class LevelGeneratorManager : MonoBehaviour
 {
-    [Header("Generation Settings")] [Tooltip("Semilla global para la generación del nivel (0 para aleatorio).")]
+    [Header("Generation Settings")]
+    [Tooltip("Semilla global para la generación del nivel (0 para aleatorio).")]
     public int globalSeed = 0;
 
     [Tooltip("Prefab del chunk orgánico (debe tener el script OrganicChunkGenerator).")]
@@ -21,6 +21,21 @@ public class LevelGeneratorManager : MonoBehaviour
 
     [Tooltip("Dimensión de un solo chunk (ej. 13 para 13x13).")]
     public int chunkDimension = 13;
+
+    [Header("Perlin Noise Settings")]
+    [Tooltip("Escala (frecuencia) del ruido Perlin. Valores más bajos = colinas más grandes.")]
+    public float noiseScale = 0.1f;
+
+    [Tooltip("Altura máxima que pueden alcanzar las montañas sobre el suelo base (0).")]
+    [Range(0, 3)]
+    public int maxMountainHeight = 3;
+
+    [Tooltip("El offset de altura base del terreno (la Y mínima de la capa de césped/tierra).")]
+    public int baseTerrainHeight = 0;
+
+    [Tooltip("Densidad para la capa de tierra bajo el césped. Más alto = capa de tierra más gruesa.")]
+    public int dirtLayerDepth = 3;
+
 
     [Header("Level Flow Settings")]
     [Tooltip("Referencia al GameObject del jugador para el seguimiento de la posición. ¡Asignar en el Inspector!")]
@@ -38,32 +53,22 @@ public class LevelGeneratorManager : MonoBehaviour
     [Tooltip("Si el jugador debe moverse automáticamente al inicio del primer chunk generado.")]
     public bool movePlayerToStart = true;
 
-    // Pool de chunks para reutilización
-    private List<OrganicChunkGenerator>
-        chunkPool = new List<OrganicChunkGenerator>(); // Chunks inactivos, listos para usar
+    private List<OrganicChunkGenerator> chunkPool = new List<OrganicChunkGenerator>();
 
-    private List<OrganicChunkGenerator>
-        activeChunks = new List<OrganicChunkGenerator>(); // Chunks actualmente en la escena y activos
+    private List<OrganicChunkGenerator> activeChunks = new List<OrganicChunkGenerator>();
 
-    // Mapa de todos los chunks generados para persistencia (clave: posición en cuadrícula)
     private Dictionary<Vector2Int, GeneratedChunkData> generatedLevelMap =
         new Dictionary<Vector2Int, GeneratedChunkData>();
 
-    private int nextChunkUniqueIndex = 0; // Un índice único para cada chunk generado globalmente
+    private int nextChunkUniqueIndex = 0;
 
-    // El chunk actual del jugador (coordenadas de la cuadrícula del chunk)
     private Vector2Int currentChunkPlayerIsInGrid = Vector2Int.zero;
 
-    /// <summary>
-    /// Clase interna para representar un slot de conexión abierto donde se puede generar un nuevo chunk.
-    /// </summary>
     private class ConnectionSlot
     {
-        public OrganicChunkGenerator.ConnectionDirection connectionDirection; // Dirección de salida del chunk padre
-        public Vector2Int parentChunkGridPosition; // Posición en cuadrícula del chunk padre
-
-        public OrganicChunkGenerator
-            parentChunkInstance; // Instancia del chunk padre (útil para referenciar y verificar actividad)
+        public OrganicChunkGenerator.ConnectionDirection connectionDirection;
+        public Vector2Int parentChunkGridPosition;
+        public OrganicChunkGenerator parentChunkInstance;
 
         public ConnectionSlot(OrganicChunkGenerator.ConnectionDirection dir, Vector2Int parentGridPos,
             OrganicChunkGenerator parentInstance)
@@ -74,13 +79,12 @@ public class LevelGeneratorManager : MonoBehaviour
         }
     }
 
-    private List<ConnectionSlot>
-        openConnectionSlots = new List<ConnectionSlot>(); // Lista de slots disponibles para generar nuevos chunks
+    private List<ConnectionSlot> openConnectionSlots = new List<ConnectionSlot>();
 
     void Start()
     {
-        InitializeChunkPool(maxActiveChunksWindow + 2); // Inicializar con algunos chunks extra
-        GenerateInitialLevel(); // Generar el nivel inicial
+        InitializeChunkPool(maxActiveChunksWindow * maxActiveChunksWindow * 2);
+        GenerateInitialLevel();
     }
 
     void Update()
@@ -91,15 +95,13 @@ public class LevelGeneratorManager : MonoBehaviour
             return;
         }
 
-        // Determinar en qué chunk de la cuadrícula está el jugador
         Vector2Int newPlayerChunkGrid = GetChunkGridPositionFromWorldPosition(playerReference.transform.position);
 
-        // Si el jugador ha cambiado de chunk en la cuadrícula
         if (newPlayerChunkGrid != currentChunkPlayerIsInGrid)
         {
-            currentChunkPlayerIsInGrid = newPlayerChunkGrid; // Actualizar la posición del chunk del jugador
+            currentChunkPlayerIsInGrid = newPlayerChunkGrid;
             Debug.Log($"Jugador ha entrado al chunk de la cuadrícula: {currentChunkPlayerIsInGrid}");
-            UpdateLevelChunks(); // Re-evaluar y actualizar los chunks activos
+            UpdateLevelChunks();
         }
     }
 
@@ -120,7 +122,7 @@ public class LevelGeneratorManager : MonoBehaviour
                 continue;
             }
 
-            chunkGO.SetActive(false); // <--- Clave: Iniciar desactivado
+            chunkGO.SetActive(false);
             chunkPool.Add(chunk);
         }
 
@@ -133,14 +135,14 @@ public class LevelGeneratorManager : MonoBehaviour
     /// <returns>Una instancia de OrganicChunkGenerator activa y lista para usar.</returns>
     private OrganicChunkGenerator GetChunkFromPool()
     {
-        if (chunkPool.Any()) // Si hay chunks disponibles en el pool
+        if (chunkPool.Any())
         {
-            OrganicChunkGenerator chunk = chunkPool[0]; // Tomar el primero
-            chunkPool.RemoveAt(0); // Removerlo del pool
-            chunk.gameObject.SetActive(true); // <--- Clave: Activarlo
+            OrganicChunkGenerator chunk = chunkPool[0];
+            chunkPool.RemoveAt(0);
+            chunk.gameObject.SetActive(true);
             return chunk;
         }
-        else // Si el pool está vacío, crear uno nuevo (esto debería ser raro si el pool es lo suficientemente grande)
+        else
         {
             Debug.LogWarning("Pool de chunks vacío, instanciando uno nuevo.");
             GameObject chunkGO = Instantiate(organicChunkPrefab, Vector3.zero, Quaternion.identity, transform);
@@ -163,12 +165,12 @@ public class LevelGeneratorManager : MonoBehaviour
     /// <param name="chunk">La instancia del chunk a devolver.</param>
     private void ReturnChunkToPool(OrganicChunkGenerator chunk)
     {
-        if (chunk != null && !chunkPool.Contains(chunk)) // Evitar errores si el chunk es nulo o ya está en el pool
+        if (chunk != null && !chunkPool.Contains(chunk))
         {
-            chunk.gameObject.SetActive(false); // <--- Clave: Desactivarlo
-            chunk.transform.position = Vector3.zero; // Opcional: Resetear posición para limpiar el editor
-            chunkPool.Add(chunk); // Añadirlo de nuevo al pool
-            activeChunks.Remove(chunk); // Removerlo de la lista de chunks activos
+            chunk.gameObject.SetActive(false);
+            chunk.transform.position = Vector3.zero;
+            chunkPool.Add(chunk);
+            activeChunks.Remove(chunk);
         }
     }
 
@@ -208,41 +210,34 @@ public class LevelGeneratorManager : MonoBehaviour
         Random.InitState(globalSeed);
         Debug.Log($"Iniciando generación de nivel con semilla global: {globalSeed}");
 
-        // 1. Crear el primer chunk (Inicio) en (0,0) de la cuadrícula
         Vector2Int initialGridPos = Vector2Int.zero;
         Vector3 initialWorldPos = GetWorldPositionFromGridPosition(initialGridPos);
 
-        // El primer chunk es siempre desde el centro, con una salida aleatoria
         GeneratedChunkData firstChunkData = new GeneratedChunkData(initialWorldPos,
             Random.Range(int.MinValue, int.MaxValue), OrganicChunkGenerator.ConnectionDirection.Center,
             nextChunkUniqueIndex++);
         firstChunkData.activeExitDirections.Add(
-            GetRandomValidExitDirection(OrganicChunkGenerator.ConnectionDirection
-                .Center)); // Una salida inicial aleatoria
+            GetRandomValidExitDirection(OrganicChunkGenerator.ConnectionDirection.Center));
 
-        // Generar y activar el primer chunk
+        firstChunkData.terrainHeights = GenerateChunkTerrainHeights(initialGridPos.x, initialGridPos.y, chunkDimension);
+
         GenerateAndActivateChunk(firstChunkData, initialGridPos);
-        currentChunkPlayerIsInGrid = initialGridPos; // El jugador comienza en este chunk
+        currentChunkPlayerIsInGrid = initialGridPos;
 
-        // 2. Mover al jugador al inicio del camino del chunk (0,0)
         if (movePlayerToStart && playerReference != null)
         {
-            // Obtener la instancia del chunk que acabamos de generar
             OrganicChunkGenerator initialChunkInstance = activeChunks.FirstOrDefault(c =>
                 GetChunkGridPositionFromWorldPosition(c.transform.position) == initialGridPos);
 
             if (initialChunkInstance != null)
             {
-                // Usamos GetPathInternalPoint para obtener una posición dentro del camino del chunk
                 Vector2Int localEntryPoint = initialChunkInstance.EntryPoint;
                 OrganicChunkGenerator.ConnectionDirection entryDir = initialChunkInstance.EntryDirection;
                 Vector2Int localInternalPathStart =
                     initialChunkInstance.GetPathInternalPoint(localEntryPoint, entryDir);
 
-                // Convertir la posición local (0-chunkSize) a posición mundial
                 Vector3 startPosition =
-                    new Vector3(localInternalPathStart.x, playerReference.transform.position.y,
-                        localInternalPathStart.y) + initialChunkInstance.transform.position;
+                    new Vector3(localInternalPathStart.x, playerReference.transform.position.y, localInternalPathStart.y) + initialChunkInstance.transform.position;
 
                 playerReference.transform.position = startPosition;
                 Debug.Log($"Jugador movido a la posición de inicio del chunk (0,0): {startPosition}");
@@ -253,8 +248,7 @@ public class LevelGeneratorManager : MonoBehaviour
             }
         }
 
-        // 3. Generar los siguientes chunks para llenar la ventana inicial
-        UpdateLevelChunks(); // La primera llamada a UpdateLevelChunks se encargará de generar los vecinos iniciales
+        UpdateLevelChunks();
     }
 
     /// <summary>
@@ -263,18 +257,14 @@ public class LevelGeneratorManager : MonoBehaviour
     /// </summary>
     private void UpdateLevelChunks()
     {
-        // Paso 1: Identificar las posiciones de cuadrícula que deberían estar activas (la "ventana" alrededor del jugador)
         HashSet<Vector2Int> desiredActiveGridPositions = new HashSet<Vector2Int>();
-        // Añadir el chunk actual del jugador
         desiredActiveGridPositions.Add(currentChunkPlayerIsInGrid);
 
-        // Añadir vecinos dentro de la "ventana" de MaxActiveChunksWindow
         for (int x = -(maxActiveChunksWindow / 2); x <= (maxActiveChunksWindow / 2); x++)
         {
             for (int y = -(maxActiveChunksWindow / 2); y <= (maxActiveChunksWindow / 2); y++)
             {
                 Vector2Int relativePos = new Vector2Int(x, y);
-                // Usar distancia Manhattan para crear una forma de diamante/cuadrado girado
                 if (Mathf.Abs(relativePos.x) + Mathf.Abs(relativePos.y) <= maxActiveChunksWindow / 2)
                 {
                     desiredActiveGridPositions.Add(currentChunkPlayerIsInGrid + relativePos);
@@ -282,12 +272,11 @@ public class LevelGeneratorManager : MonoBehaviour
             }
         }
 
-        // Paso 2: Desactivar chunks que NO están en la lista de deseados (y que están actualmente activos)
         List<OrganicChunkGenerator> chunksToDeactivate = new List<OrganicChunkGenerator>();
         foreach (var chunkInstance in activeChunks)
         {
             Vector2Int chunkGridPos = GetChunkGridPositionFromWorldPosition(chunkInstance.transform.position);
-            if (!desiredActiveGridPositions.Contains(chunkGridPos)) // Si el chunk activo no está en la ventana deseada
+            if (!desiredActiveGridPositions.Contains(chunkGridPos))
             {
                 chunksToDeactivate.Add(chunkInstance);
             }
@@ -297,40 +286,33 @@ public class LevelGeneratorManager : MonoBehaviour
         {
             Debug.Log(
                 $"Desactivando chunk en {chunkInstance.transform.position} (Grid: {GetChunkGridPositionFromWorldPosition(chunkInstance.transform.position)})");
-            ReturnChunkToPool(chunkInstance); // Devuelve al pool y desactiva el GameObject
+            ReturnChunkToPool(chunkInstance);
         }
 
-        // Paso 3: Activar o generar chunks que SÍ están en la lista de deseados
         foreach (Vector2Int gridPos in desiredActiveGridPositions)
         {
-            // Intentar encontrar el chunk activo (ya está en escena y activo)
             OrganicChunkGenerator activeInstance = activeChunks.FirstOrDefault(c =>
                 GetChunkGridPositionFromWorldPosition(c.transform.position) == gridPos);
 
-            if (activeInstance == null) // Si no está activo (necesita ser activado o generado)
+            if (activeInstance == null)
             {
-                if (generatedLevelMap.TryGetValue(gridPos,
-                        out GeneratedChunkData chunkData)) // Si ya lo generamos antes (en el mapa)
+                if (generatedLevelMap.TryGetValue(gridPos, out GeneratedChunkData chunkData))
                 {
                     Debug.Log($"Reactivando chunk existente en Grid: {gridPos} (ID: {chunkData.levelChunkIndex})");
-                    GenerateAndActivateChunk(chunkData, gridPos); // Reutilizar el chunk del pool y regenerarlo
+                    GenerateAndActivateChunk(chunkData, gridPos);
                 }
-                else // Chunk nunca antes generado, hay que crearlo por primera vez
+                else
                 {
-                    // Necesitamos una ConnectionSlot para generar un nuevo chunk
-                    // Esto recorre los slots de conexión abiertos por chunks existentes que apunten a esta gridPos
                     ConnectionSlot slotToUse = openConnectionSlots.FirstOrDefault(s =>
                         GetTargetGridPosition(s.parentChunkGridPosition, s.connectionDirection) == gridPos);
 
                     if (slotToUse != null)
                     {
-                        // Determinar las salidas para el nuevo chunk (incluyendo lógica de bifurcaciones)
                         List<OrganicChunkGenerator.ConnectionDirection> desiredExits =
                             new List<OrganicChunkGenerator.ConnectionDirection>();
                         OrganicChunkGenerator.ConnectionDirection newChunkEntryDir =
                             GetOppositeDirection(slotToUse.connectionDirection);
 
-                        // Lógica para intentar una bifurcación
                         bool tryFork = (forkFrequency > 0 && nextChunkUniqueIndex % forkFrequency == 0);
 
                         if (tryFork)
@@ -342,7 +324,6 @@ public class LevelGeneratorManager : MonoBehaviour
                                 desiredExits.Add(mainExit);
                             }
 
-                            // Intentar añadir una segunda salida (bifurcación)
                             List<OrganicChunkGenerator.ConnectionDirection> possibleForkDirs =
                                 new List<OrganicChunkGenerator.ConnectionDirection>
                                 {
@@ -351,9 +332,8 @@ public class LevelGeneratorManager : MonoBehaviour
                                     OrganicChunkGenerator.ConnectionDirection.East,
                                     OrganicChunkGenerator.ConnectionDirection.West
                                 };
-                            possibleForkDirs.Remove(newChunkEntryDir); // No puede bifurcarse hacia la entrada
-                            possibleForkDirs
-                                .Remove(mainExit); // No puede bifurcarse en la misma dirección que la salida principal
+                            possibleForkDirs.Remove(newChunkEntryDir);
+                            possibleForkDirs.Remove(mainExit);
 
                             if (possibleForkDirs.Any())
                             {
@@ -364,36 +344,31 @@ public class LevelGeneratorManager : MonoBehaviour
                             }
                         }
 
-                        if (!desiredExits.Any()) // Asegurarse de que siempre haya al menos una salida
+                        if (!desiredExits.Any())
                         {
                             desiredExits.Add(GetRandomValidExitDirection(newChunkEntryDir));
                         }
 
-                        // Crear los datos para el nuevo chunk
                         Vector3 newChunkWorldPos = GetWorldPositionFromGridPosition(gridPos);
                         GeneratedChunkData newChunkData = new GeneratedChunkData(newChunkWorldPos,
                             Random.Range(int.MinValue, int.MaxValue), newChunkEntryDir, nextChunkUniqueIndex++);
-                        newChunkData.activeExitDirections = desiredExits; // Asignar las salidas determinadas
+                        newChunkData.activeExitDirections = desiredExits;
 
-                        // Intentar colocar y activar el nuevo chunk
+                        newChunkData.terrainHeights = GenerateChunkTerrainHeights(gridPos.x, gridPos.y, chunkDimension);
+
                         bool chunkPlaced = TryPlaceChunk(newChunkData, gridPos, slotToUse);
                         if (chunkPlaced)
                         {
-                            // El slot se elimina dentro de TryPlaceChunk si la colocación es exitosa
                         }
                     }
-                    // else: Si no hay un slot de conexión apuntando a esta `gridPos` y el chunk no existe,
-                    // significa que aún no se ha llegado a esta área por un camino válido. No hacemos nada.
                 }
             }
         }
 
-        // Paso 4: Limpiar openConnectionSlots
-        // Remover slots si su chunk padre ya no está activo, o si el slot ya fue usado para generar un chunk
         openConnectionSlots.RemoveAll(slot =>
-                !activeChunks.Contains(slot.parentChunkInstance) || // El chunk padre del slot no está activo
+                !activeChunks.Contains(slot.parentChunkInstance) ||
                 generatedLevelMap.ContainsKey(GetTargetGridPosition(slot.parentChunkGridPosition,
-                    slot.connectionDirection)) // El chunk que generaría este slot ya existe
+                    slot.connectionDirection))
         );
     }
 
@@ -412,7 +387,7 @@ public class LevelGeneratorManager : MonoBehaviour
             OrganicChunkGenerator.ConnectionDirection.South => parentGridPos + Vector2Int.down,
             OrganicChunkGenerator.ConnectionDirection.East => parentGridPos + Vector2Int.right,
             OrganicChunkGenerator.ConnectionDirection.West => parentGridPos + Vector2Int.left,
-            _ => parentGridPos // Centro o None
+            _ => parentGridPos
         };
     }
 
@@ -434,26 +409,22 @@ public class LevelGeneratorManager : MonoBehaviour
 
         newChunkInstance.transform.position = chunkData.worldPosition;
 
-        // Antes de generar, verificar si esta posición de cuadrícula ya está ocupada
         if (generatedLevelMap.ContainsKey(chunkGridPos))
         {
             Debug.LogWarning(
                 $"Posición de cuadrícula {chunkGridPos} ya ocupada por un chunk existente. No se puede colocar.");
             ReturnChunkToPool(newChunkInstance);
-            return false; // No se puede colocar aquí
+            return false;
         }
 
-        // Generar el chunk con sus datos
-        newChunkInstance.GenerateChunk(chunkData.chunkSeed, chunkData.entryDirection, chunkData.activeExitDirections);
+        newChunkInstance.GenerateChunk(chunkData.chunkSeed, chunkData.entryDirection, chunkData.activeExitDirections,
+                                       chunkData.terrainHeights, dirtLayerDepth);
 
-        // Añadir a las listas de gestión
         activeChunks.Add(newChunkInstance);
-        generatedLevelMap[chunkGridPos] = chunkData; // Guardar los datos en el mapa usando la posición de la cuadrícula
+        generatedLevelMap[chunkGridPos] = chunkData;
 
-        // Añadir nuevas conexiones para las salidas de este chunk
         foreach (var exitDir in newChunkInstance.ActiveExitDirections)
         {
-            // Asegurarse de no añadir un slot si el destino ya existe en el mapa (ej. se conectó con un chunk preexistente)
             Vector2Int targetGridPos = GetTargetGridPosition(chunkGridPos, exitDir);
             if (!generatedLevelMap.ContainsKey(targetGridPos))
             {
@@ -461,13 +432,12 @@ public class LevelGeneratorManager : MonoBehaviour
             }
         }
 
-        // Si el slot fue usado con éxito, removerlo de openConnectionSlots
         if (parentSlot != null && openConnectionSlots.Contains(parentSlot))
         {
             openConnectionSlots.Remove(parentSlot);
         }
 
-        return true; // Colocado con éxito
+        return true;
     }
 
     /// <summary>
@@ -481,26 +451,21 @@ public class LevelGeneratorManager : MonoBehaviour
         if (chunk != null)
         {
             chunk.transform.position = chunkData.worldPosition;
-            chunk.GenerateChunk(chunkData.chunkSeed, chunkData.entryDirection, chunkData.activeExitDirections);
+            chunk.GenerateChunk(chunkData.chunkSeed, chunkData.entryDirection, chunkData.activeExitDirections,
+                                chunkData.terrainHeights, dirtLayerDepth);
 
-            // Asegurarse de que no se duplique en activeChunks si ya estaba ahí
             if (!activeChunks.Contains(chunk))
             {
                 activeChunks.Add(chunk);
             }
 
-            // Asegurarse de que esté en el mapa (debería estar si se reactiva)
-            // Esto es importante si un chunk fue "desactivado" de activeChunks pero aún no se eliminó del mapa por alguna razón.
             generatedLevelMap[chunkGridPos] = chunkData;
 
-            // Actualizar openConnectionSlots con las salidas de este chunk (si se está volviendo a activar)
             foreach (var exitDir in chunkData.activeExitDirections)
             {
                 Vector2Int targetGridPos = GetTargetGridPosition(chunkGridPos, exitDir);
-                // Solo añadir el slot si el chunk de destino no existe ya en el mapa
                 if (!generatedLevelMap.ContainsKey(targetGridPos))
                 {
-                    // Evitar añadir slots duplicados
                     bool slotExists = openConnectionSlots.Any(s =>
                         s.parentChunkGridPosition == chunkGridPos && s.connectionDirection == exitDir);
                     if (!slotExists)
@@ -526,7 +491,7 @@ public class LevelGeneratorManager : MonoBehaviour
                 OrganicChunkGenerator.ConnectionDirection.East,
                 OrganicChunkGenerator.ConnectionDirection.West
             };
-        possibleExits.Remove(entryDir); // Elimina la dirección de entrada de las opciones
+        possibleExits.Remove(entryDir);
 
         if (possibleExits.Count == 0) return OrganicChunkGenerator.ConnectionDirection.None;
 
@@ -545,37 +510,58 @@ public class LevelGeneratorManager : MonoBehaviour
             OrganicChunkGenerator.ConnectionDirection.South => OrganicChunkGenerator.ConnectionDirection.North,
             OrganicChunkGenerator.ConnectionDirection.East => OrganicChunkGenerator.ConnectionDirection.West,
             OrganicChunkGenerator.ConnectionDirection.West => OrganicChunkGenerator.ConnectionDirection.East,
-            _ => OrganicChunkGenerator.ConnectionDirection.None // Para Center o None
+            _ => OrganicChunkGenerator.ConnectionDirection.None
         };
     }
 
-    // --- Funciones de Depuración y Gizmos ---
+    /// <summary>
+    /// Genera los datos de altura del terreno para un chunk específico usando Perlin noise.
+    /// </summary>
+    /// <param name="gridX">Coordenada X de la cuadrícula del chunk.</param>
+    /// <param name="gridZ">Coordenada Z de la cuadrícula del chunk.</param>
+    /// <param name="chunkSize">Dimensión del chunk.</param>
+    /// <returns>Un array 2D de enteros representando la altura de cada (X,Z) dentro del chunk.</returns>
+    private int[,] GenerateChunkTerrainHeights(int gridX, int gridZ, int chunkSize)
+    {
+        int[,] heights = new int[chunkSize, chunkSize];
+
+        for (int x = 0; x < chunkSize; x++)
+        {
+            for (int z = 0; z < chunkSize; z++)
+            {
+                float globalX = (gridX * chunkSize) + x;
+                float globalZ = (gridZ * chunkSize) + z;
+
+                float noiseValue = Mathf.PerlinNoise(globalX * noiseScale, globalZ * noiseScale);
+
+                int height = Mathf.FloorToInt(noiseValue * maxMountainHeight);
+
+                heights[x, z] = baseTerrainHeight + height;
+            }
+        }
+        return heights;
+    }
 
     void OnDrawGizmos()
     {
-        // Dibujar slots de conexión abiertos (para ver dónde se pueden generar nuevos chunks)
         if (openConnectionSlots != null)
         {
             Gizmos.color = Color.blue;
             foreach (var slot in openConnectionSlots)
             {
-                // Solo dibujar si el padre está activo
                 if (slot.parentChunkInstance != null && slot.parentChunkInstance.gameObject.activeInHierarchy)
                 {
-                    // Calcular la posición mundial del centro de la conexión
                     Vector3 parentChunkWorldOrigin = GetWorldPositionFromGridPosition(slot.parentChunkGridPosition);
                     Vector3 worldConnPos = parentChunkWorldOrigin +
                                            new Vector3(chunkDimension / 2f, 0, chunkDimension / 2f) +
                                            GetDirectionVector(slot.connectionDirection) * (chunkDimension / 2.0f);
 
-                    // Ajuste para dibujar en el centro de la pared de conexión a la altura de la pared
-                    Vector3 displayPos = worldConnPos + Vector3.up * 1f; // A la altura de la pared
+                    Vector3 displayPos = worldConnPos + Vector3.up * 1f;
 
                     Gizmos.DrawSphere(displayPos, 0.5f);
                     Gizmos.DrawLine(displayPos, displayPos + GetDirectionVector(slot.connectionDirection) * 2f);
 
 #if UNITY_EDITOR
-                    // Dibuja la posición de la cuadrícula del destino para depuración
                     Handles.Label(displayPos + Vector3.up * 1.5f,
                         $"To: {GetTargetGridPosition(slot.parentChunkGridPosition, slot.connectionDirection)}");
 #endif
@@ -583,7 +569,6 @@ public class LevelGeneratorManager : MonoBehaviour
             }
         }
 
-        // Dibujar chunks activos (para visualizar la ventana de chunks)
         if (activeChunks != null)
         {
             Gizmos.color = Color.red;
@@ -596,7 +581,6 @@ public class LevelGeneratorManager : MonoBehaviour
                     Gizmos.DrawWireCube(chunkCenter, new Vector3(chunkDimension, 1, chunkDimension));
 
 #if UNITY_EDITOR
-                    // Dibuja el índice y la posición de la cuadrícula del chunk para depuración
                     Vector2Int gridPos = GetChunkGridPositionFromWorldPosition(chunk.transform.position);
                     if (generatedLevelMap.TryGetValue(gridPos, out GeneratedChunkData data))
                     {
@@ -608,14 +592,12 @@ public class LevelGeneratorManager : MonoBehaviour
             }
         }
 
-        // Puedes dibujar los chunks del pool en otro color si están activos en el editor
-        // (Normalmente no deberían estar activos, pero por si acaso para depuración)
         if (chunkPool != null)
         {
             Gizmos.color = Color.gray;
             foreach (var chunk in chunkPool)
             {
-                if (chunk != null && chunk.gameObject.activeSelf) // Si por alguna razón está activo en el editor
+                if (chunk != null && chunk.gameObject.activeSelf)
                 {
                     Vector3 chunkCenter = chunk.transform.position +
                                           new Vector3(chunkDimension / 2f, 0, chunkDimension / 2f);
