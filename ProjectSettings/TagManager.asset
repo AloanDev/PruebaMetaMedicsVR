@@ -6,11 +6,12 @@ TagManager:
   tags:
   - Floor
   - Wall
+  - Anchor
   layers:
   - Default
   - TransparentFX
   - Ignore Raycast
-  - 
+  - InteractableObjects
   - Water
   - UI
   - 
